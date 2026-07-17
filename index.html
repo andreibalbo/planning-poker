@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Planning Poker</title>
+<style>
+  :root {
+    --bg: #0f1220;
+    --card: #1a1e33;
+    --card2: #232842;
+    --accent: #6c8cff;
+    --accent2: #4cd3a5;
+    --muted: #8b91b0;
+    --text: #eef1ff;
+    --danger: #ff6b6b;
+    --shadow: 0 8px 30px rgba(0,0,0,.35);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: radial-gradient(1000px 500px at 75% -10%, #232a52 0%, rgba(0,0,0,0) 55%), var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 18px 24px; border-bottom: 1px solid rgba(255,255,255,.06);
+    flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 20px; }
+  .brand .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--accent2); box-shadow: 0 0 12px var(--accent2); }
+  .room-tag { font-size: 13px; color: var(--muted); }
+  .room-tag b { color: var(--text); }
+  main { max-width: 1000px; margin: 0 auto; padding: 24px; }
+
+  /* Join screen */
+  .overlay {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(6,8,18,.75); backdrop-filter: blur(4px); z-index: 50;
+  }
+  .join-card {
+    background: var(--card); border: 1px solid rgba(255,255,255,.08); border-radius: 18px;
+    padding: 32px; width: min(90vw, 420px); box-shadow: var(--shadow); text-align: center;
+  }
+  .join-card h1 { margin: 0 0 6px; font-size: 24px; }
+  .join-card p { margin: 0 0 20px; color: var(--muted); font-size: 14px; }
+  input[type=text] {
+    width: 100%; padding: 14px 16px; border-radius: 12px; border: 1px solid rgba(255,255,255,.12);
+    background: var(--card2); color: var(--text); font-size: 16px; outline: none;
+  }
+  input[type=text]:focus { border-color: var(--accent); }
+  button {
+    cursor: pointer; border: none; border-radius: 12px; font-size: 15px; font-weight: 600;
+    padding: 12px 18px; color: #fff; transition: transform .06s ease, opacity .2s ease;
+  }
+  button:active { transform: translateY(1px); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary { background: linear-gradient(135deg, var(--accent), #8a6cff); width: 100%; margin-top: 16px; }
+  .btn-reveal { background: linear-gradient(135deg, var(--accent2), #37b98a); }
+  .btn-ghost { background: var(--card2); border: 1px solid rgba(255,255,255,.1); }
+  .btn-danger { background: transparent; border: 1px solid rgba(255,107,107,.5); color: var(--danger); }
+
+  /* Cards / votes */
+  .section-title { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 12px; }
+  .cards { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 28px; }
+  .card-btn {
+    width: 62px; height: 88px; border-radius: 14px; background: var(--card);
+    border: 2px solid rgba(255,255,255,.1); color: var(--text); font-size: 22px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    transition: transform .1s ease, border-color .15s ease, background .15s ease;
+  }
+  .card-btn:hover { transform: translateY(-4px); border-color: var(--accent); }
+  .card-btn.selected { background: linear-gradient(135deg, var(--accent), #8a6cff); border-color: transparent; transform: translateY(-6px); box-shadow: var(--shadow); }
+
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 28px; }
+  .spacer { flex: 1; }
+
+  /* Participants */
+  .players { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+  .player {
+    background: var(--card); border: 1px solid rgba(255,255,255,.07); border-radius: 16px;
+    padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 10px; position: relative;
+  }
+  .player .name { font-weight: 600; font-size: 15px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .player .you { font-size: 11px; color: var(--accent2); }
+  .vote-slot {
+    width: 54px; height: 76px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+    font-size: 24px; font-weight: 700; border: 2px dashed rgba(255,255,255,.14); background: var(--card2);
+    transition: all .2s ease;
+  }
+  .vote-slot.voted { border-style: solid; border-color: var(--accent2); color: var(--accent2); }
+  .vote-slot.revealed { border-style: solid; border-color: var(--accent); background: linear-gradient(135deg,#2a305a,#20264a); color: var(--text); }
+  .badge-here { position: absolute; top: 10px; right: 10px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent2); box-shadow: 0 0 8px var(--accent2); }
+
+  .stats {
+    display: none; margin-top: 24px; background: var(--card); border: 1px solid rgba(255,255,255,.08);
+    border-radius: 16px; padding: 18px 20px; gap: 32px; flex-wrap: wrap;
+  }
+  .stats.show { display: flex; }
+  .stat { display: flex; flex-direction: column; }
+  .stat .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .stat .value { font-size: 26px; font-weight: 700; }
+  .consensus { color: var(--accent2); }
+
+  .status-msg { color: var(--muted); font-size: 14px; }
+  .config-warn {
+    background: rgba(255,107,107,.1); border: 1px solid rgba(255,107,107,.4); color: #ffd0d0;
+    padding: 16px 20px; border-radius: 12px; margin: 24px; font-size: 14px; line-height: 1.5;
+  }
+  code { background: rgba(255,255,255,.1); padding: 2px 6px; border-radius: 6px; font-size: 13px; }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 30px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="dot"></span> Planning Poker</div>
+  <div class="room-tag">Room: <b id="roomName">—</b> · <span id="onlineCount">0</span> online</div>
+</header>
+
+<div id="configWarn" class="config-warn" style="display:none">
+  <b>Firebase not configured yet.</b> Open this file and paste your Firebase project config into the
+  <code>firebaseConfig</code> object near the bottom of the file. See the setup guide (README) for the 5-minute walkthrough.
+</div>
+
+<main id="app" style="display:none">
+  <p class="section-title">Your vote</p>
+  <div class="cards" id="cards"></div>
+
+  <div class="toolbar">
+    <button class="btn-reveal" id="revealBtn">👁 Reveal votes</button>
+    <button class="btn-ghost" id="hideBtn" style="display:none">🙈 Hide votes</button>
+    <span class="spacer"></span>
+    <span class="status-msg" id="statusMsg"></span>
+    <button class="btn-danger" id="clearBtn">↻ New round / clear session</button>
+  </div>
+
+  <p class="section-title">Participants</p>
+  <div class="players" id="players"></div>
+
+  <div class="stats" id="stats">
+    <div class="stat"><span class="label">Average</span><span class="value" id="statAvg">—</span></div>
+    <div class="stat"><span class="label">Range</span><span class="value" id="statRange">—</span></div>
+    <div class="stat"><span class="label">Votes in</span><span class="value" id="statCount">—</span></div>
+    <div class="stat"><span class="label">Agreement</span><span class="value consensus" id="statConsensus">—</span></div>
+  </div>
+</main>
+
+<div class="overlay" id="joinOverlay" style="display:none">
+  <div class="join-card">
+    <h1>Join the session</h1>
+    <p>Enter your name so the team can see you in the room.</p>
+    <input type="text" id="nameInput" placeholder="Your name" maxlength="24" autocomplete="off" />
+    <button class="btn-primary" id="joinBtn">Enter room →</button>
+  </div>
+</div>
+
+<footer>Static site · state synced live via Firebase · <span id="uidTag"></span></footer>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getDatabase, ref, set, update, remove, onValue, onDisconnect, get, child
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+  import {
+    getAuth, signInAnonymously, onAuthStateChanged
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+  // ==========================================================================
+  //  1. PASTE YOUR FIREBASE CONFIG HERE  (see README for how to get it)
+  // ==========================================================================
+    const firebaseConfig = {
+    apiKey: "AIzaSyC1NZRIPk-pex2_wVXz0mGeP8fs0fZr6Pk",
+    authDomain: "planning-poker-8723e.firebaseapp.com",
+    databaseURL: "https://planning-poker-8723e-default-rtdb.firebaseio.com",
+    projectId: "planning-poker-8723e",
+    storageBucket: "planning-poker-8723e.firebasestorage.app",
+    messagingSenderId: "451680397568",
+    appId: "1:451680397568:web:60a405e26af605ff5febe5"
+  };
+  // ==========================================================================
+
+  const DECK = ["0", "1", "2", "3", "5", "8", "13", "21", "34", "55", "89", "?"];
+
+  const configured = !firebaseConfig.apiKey.startsWith("YOUR_");
+  if (!configured) {
+    document.getElementById("configWarn").style.display = "block";
+    throw new Error("Firebase config missing — fill in firebaseConfig.");
+  }
+
+  // Room from URL (?room=xyz), default "default". Lets teams run separate rooms.
+  const params = new URLSearchParams(location.search);
+  const roomId = (params.get("room") || "default").replace(/[.#$/\[\]]/g, "-").slice(0, 40);
+  document.getElementById("roomName").textContent = roomId;
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  const auth = getAuth(app);
+
+  const roomRef = ref(db, `rooms/${roomId}`);
+  const membersRef = child(roomRef, "members");
+  const revealedRef = child(roomRef, "revealed");
+
+  let uid = null;
+  let myName = localStorage.getItem("pp_name") || "";
+  let selectedVote = null;
+  let revealed = false;
+  let membersCache = {};
+
+  // ---- DOM refs ----
+  const $ = (id) => document.getElementById(id);
+  const cardsEl = $("cards"), playersEl = $("players"), appEl = $("app");
+  const joinOverlay = $("joinOverlay"), nameInput = $("nameInput");
+
+  // ---- Build vote cards ----
+  DECK.forEach((v) => {
+    const b = document.createElement("button");
+    b.className = "card-btn";
+    b.textContent = v;
+    b.dataset.value = v;
+    b.addEventListener("click", () => castVote(v));
+    cardsEl.appendChild(b);
+  });
+
+  // ---- Auth (anonymous) ----
+  signInAnonymously(auth).catch((e) => {
+    $("statusMsg").textContent = "Auth error: " + e.message;
+  });
+
+  onAuthStateChanged(auth, (user) => {
+    if (!user) return;
+    uid = user.uid;
+    $("uidTag").textContent = "id " + uid.slice(0, 6);
+    startRoom();
+  });
+
+  function startRoom() {
+    // Show join overlay (prefill remembered name)
+    nameInput.value = myName;
+    joinOverlay.style.display = "flex";
+    appEl.style.display = "block";
+    setTimeout(() => nameInput.focus(), 100);
+
+    // Live subscriptions
+    onValue(membersRef, (snap) => {
+      membersCache = snap.val() || {};
+      renderPlayers();
+    });
+    onValue(revealedRef, (snap) => {
+      revealed = !!snap.val();
+      renderPlayers();
+      renderRevealButtons();
+    });
+  }
+
+  $("joinBtn").addEventListener("click", joinRoom);
+  nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") joinRoom(); });
+
+  async function joinRoom() {
+    const name = nameInput.value.trim();
+    if (!name) { nameInput.focus(); return; }
+    myName = name;
+    localStorage.setItem("pp_name", name);
+
+    const meRef = child(membersRef, uid);
+    await set(meRef, { name, vote: null, hasVoted: false, joinedAt: Date.now() });
+    // Auto-remove me when I close the tab / disconnect
+    onDisconnect(meRef).remove();
+
+    joinOverlay.style.display = "none";
+  }
+
+  async function castVote(v) {
+    if (!uid || !membersCache[uid]) return;
+    selectedVote = (selectedVote === v) ? null : v; // toggle off if same
+    await update(child(membersRef, uid), {
+      vote: selectedVote,
+      hasVoted: selectedVote !== null
+    });
+    renderCards();
+  }
+
+  $("revealBtn").addEventListener("click", () => set(revealedRef, true));
+  $("hideBtn").addEventListener("click", () => set(revealedRef, false));
+
+  $("clearBtn").addEventListener("click", async () => {
+    if (!confirm("Clear the session? This removes everyone and resets votes for a new round.")) return;
+    await remove(roomRef);
+    selectedVote = null;
+    // Re-add myself with a fresh slate so the initiator stays in the room
+    const meRef = child(membersRef, uid);
+    await set(meRef, { name: myName, vote: null, hasVoted: false, joinedAt: Date.now() });
+    onDisconnect(meRef).remove();
+    renderCards();
+  });
+
+  function renderCards() {
+    [...cardsEl.children].forEach((b) => {
+      b.classList.toggle("selected", b.dataset.value === selectedVote);
+    });
+  }
+
+  function renderRevealButtons() {
+    $("revealBtn").style.display = revealed ? "none" : "inline-block";
+    $("hideBtn").style.display = revealed ? "inline-block" : "none";
+  }
+
+  function renderPlayers() {
+    const entries = Object.entries(membersCache)
+      .sort((a, b) => (a[1].joinedAt || 0) - (b[1].joinedAt || 0));
+
+    $("onlineCount").textContent = entries.length;
+    playersEl.innerHTML = "";
+
+    entries.forEach(([id, m]) => {
+      const card = document.createElement("div");
+      card.className = "player";
+
+      const dot = document.createElement("span");
+      dot.className = "badge-here";
+      card.appendChild(dot);
+
+      const slot = document.createElement("div");
+      slot.className = "vote-slot";
+      if (revealed && m.hasVoted) {
+        slot.classList.add("revealed");
+        slot.textContent = m.vote;
+      } else if (m.hasVoted) {
+        slot.classList.add("voted");
+        slot.textContent = "✓";
+      } else {
+        slot.textContent = "…";
+      }
+      card.appendChild(slot);
+
+      const name = document.createElement("div");
+      name.className = "name";
+      name.textContent = m.name;
+      card.appendChild(name);
+
+      if (id === uid) {
+        const you = document.createElement("div");
+        you.className = "you";
+        you.textContent = "you";
+        card.appendChild(you);
+      }
+      playersEl.appendChild(card);
+    });
+
+    // Sync my selected vote from the DB (e.g. after clear or reconnect)
+    selectedVote = membersCache[uid] ? (membersCache[uid].vote ?? null) : null;
+    renderCards();
+
+    updateStatus(entries);
+    renderStats(entries);
+  }
+
+  function updateStatus(entries) {
+    const total = entries.length;
+    const voted = entries.filter(([, m]) => m.hasVoted).length;
+    $("statusMsg").textContent = revealed
+      ? "Votes revealed"
+      : `${voted} / ${total} voted`;
+  }
+
+  function renderStats(entries) {
+    const statsEl = $("stats");
+    if (!revealed) { statsEl.classList.remove("show"); return; }
+
+    const numeric = entries
+      .map(([, m]) => m.vote)
+      .filter((v) => v !== null && v !== "?" && !isNaN(parseFloat(v)))
+      .map(Number);
+    const votedCount = entries.filter(([, m]) => m.hasVoted).length;
+
+    statsEl.classList.add("show");
+    $("statCount").textContent = votedCount;
+
+    if (numeric.length === 0) {
+      $("statAvg").textContent = "—";
+      $("statRange").textContent = "—";
+      $("statConsensus").textContent = "—";
+      return;
+    }
+    const avg = numeric.reduce((a, b) => a + b, 0) / numeric.length;
+    const min = Math.min(...numeric), max = Math.max(...numeric);
+    $("statAvg").textContent = avg.toFixed(1);
+    $("statRange").textContent = min === max ? `${min}` : `${min}–${max}`;
+    const allSame = numeric.every((n) => n === numeric[0]) &&
+                    numeric.length === votedCount; // no "?" outstanding
+    $("statConsensus").textContent = allSame ? "Unanimous 🎉" : (min === max ? "Aligned" : "Discuss");
+  }
+</script>
+</body>
+</html>
