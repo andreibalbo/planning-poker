@@ -85,6 +85,9 @@
   }
   .player .name { font-weight: 600; font-size: 15px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .player .you { font-size: 11px; color: var(--accent2); }
+  .player .crown { position: absolute; top: 8px; left: 10px; font-size: 15px; line-height: 1; filter: drop-shadow(0 0 4px rgba(255,196,0,.6)); }
+  .player.is-master { border-color: rgba(255,196,0,.45); }
+  .guest-hint { color: var(--muted); font-size: 13px; font-style: italic; }
   .vote-slot {
     width: 54px; height: 76px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
     font-size: 24px; font-weight: 700; border: 2px dashed rgba(255,255,255,.14); background: var(--card2);
@@ -132,9 +135,11 @@
   <div class="toolbar">
     <button class="btn-reveal" id="revealBtn">👁 Reveal votes</button>
     <button class="btn-ghost" id="hideBtn" style="display:none">🙈 Hide votes</button>
+    <button class="btn-ghost" id="newRoundBtn">↻ New round</button>
+    <span class="guest-hint" id="guestHint" style="display:none">Only the room master can reveal or reset votes.</span>
     <span class="spacer"></span>
     <span class="status-msg" id="statusMsg"></span>
-    <button class="btn-danger" id="clearBtn">↻ New round / clear session</button>
+    <button class="btn-danger" id="clearBtn">✕ Clear session</button>
   </div>
 
   <p class="section-title">Participants</p>
@@ -162,7 +167,7 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import {
-    getDatabase, ref, set, update, remove, onValue, onDisconnect, get, child
+    getDatabase, ref, set, update, remove, onValue, onDisconnect, get, child, runTransaction
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
   import {
     getAuth, signInAnonymously, onAuthStateChanged
@@ -202,12 +207,16 @@
   const roomRef = ref(db, `rooms/${roomId}`);
   const membersRef = child(roomRef, "members");
   const revealedRef = child(roomRef, "revealed");
+  const masterRef = child(roomRef, "master");
 
   let uid = null;
   let myName = localStorage.getItem("pp_name") || "";
   let selectedVote = null;
   let revealed = false;
   let membersCache = {};
+  let masterUid = null;
+  let joined = false;
+  const amMaster = () => uid && masterUid === uid;
 
   // ---- DOM refs ----
   const $ = (id) => document.getElementById(id);
@@ -246,13 +255,47 @@
     // Live subscriptions
     onValue(membersRef, (snap) => {
       membersCache = snap.val() || {};
+      // If I had joined but I'm no longer a member, the session was cleared
+      // (or I was removed) — send me back to the join screen, no refresh needed.
+      if (joined && uid && !membersCache[uid]) {
+        joined = false;
+        selectedVote = null;
+        nameInput.value = myName;
+        joinOverlay.style.display = "flex";
+      }
+      maybeClaimMaster();
       renderPlayers();
+      renderControls();
     });
     onValue(revealedRef, (snap) => {
       revealed = !!snap.val();
       renderPlayers();
-      renderRevealButtons();
+      renderControls();
     });
+    onValue(masterRef, (snap) => {
+      masterUid = snap.val() || null;
+      maybeClaimMaster();
+      renderPlayers();
+      renderControls();
+    });
+  }
+
+  // First present member (earliest join) claims master when there is none,
+  // or when the current master has left. Transaction keeps it race-safe.
+  function maybeClaimMaster() {
+    if (!uid || !joined) return;
+    const entries = Object.entries(membersCache)
+      .sort((a, b) => (a[1].joinedAt || 0) - (b[1].joinedAt || 0));
+    if (entries.length === 0) return;
+    const earliestUid = entries[0][0];
+    const masterPresent = masterUid && membersCache[masterUid];
+    if (!masterPresent && earliestUid === uid) {
+      runTransaction(masterRef, (cur) => {
+        if (cur === null) return uid;              // no master yet
+        if (!membersCache[cur]) return uid;        // old master left
+        return;                                     // valid master exists, abort
+      });
+    }
   }
 
   $("joinBtn").addEventListener("click", joinRoom);
@@ -268,8 +311,10 @@
     await set(meRef, { name, vote: null, hasVoted: false, joinedAt: Date.now() });
     // Auto-remove me when I close the tab / disconnect
     onDisconnect(meRef).remove();
+    joined = true;
 
     joinOverlay.style.display = "none";
+    maybeClaimMaster(); // first joiner grabs the crown
   }
 
   async function castVote(v) {
@@ -282,18 +327,29 @@
     renderCards();
   }
 
-  $("revealBtn").addEventListener("click", () => set(revealedRef, true));
-  $("hideBtn").addEventListener("click", () => set(revealedRef, false));
+  $("revealBtn").addEventListener("click", () => { if (amMaster()) set(revealedRef, true); });
+  $("hideBtn").addEventListener("click", () => { if (amMaster()) set(revealedRef, false); });
 
-  $("clearBtn").addEventListener("click", async () => {
-    if (!confirm("Clear the session? This removes everyone and resets votes for a new round.")) return;
-    await remove(roomRef);
+  // New round: keep everyone in the room, just wipe votes and hide again.
+  $("newRoundBtn").addEventListener("click", async () => {
+    if (!amMaster()) return;
+    const updates = {};
+    Object.keys(membersCache).forEach((id) => {
+      updates[`members/${id}/vote`] = null;
+      updates[`members/${id}/hasVoted`] = false;
+    });
+    updates["revealed"] = false;
+    await update(roomRef, updates);
     selectedVote = null;
-    // Re-add myself with a fresh slate so the initiator stays in the room
-    const meRef = child(membersRef, uid);
-    await set(meRef, { name: myName, vote: null, hasVoted: false, joinedAt: Date.now() });
-    onDisconnect(meRef).remove();
     renderCards();
+  });
+
+  // Clear session: remove the whole room. Everyone (incl. master) is dropped
+  // and automatically returned to the join screen — no manual refresh needed.
+  $("clearBtn").addEventListener("click", async () => {
+    if (!amMaster()) return;
+    if (!confirm("Clear the session? Everyone will be removed and sent back to the join screen.")) return;
+    await remove(roomRef);
   });
 
   function renderCards() {
@@ -302,9 +358,15 @@
     });
   }
 
-  function renderRevealButtons() {
-    $("revealBtn").style.display = revealed ? "none" : "inline-block";
-    $("hideBtn").style.display = revealed ? "inline-block" : "none";
+  function renderControls() {
+    const master = amMaster();
+    // Master-only controls
+    $("revealBtn").style.display = (master && !revealed) ? "inline-block" : "none";
+    $("hideBtn").style.display   = (master && revealed) ? "inline-block" : "none";
+    $("newRoundBtn").style.display = master ? "inline-block" : "none";
+    $("clearBtn").style.display  = master ? "inline-block" : "none";
+    // Guests just see a hint (only once they've joined)
+    $("guestHint").style.display = (joined && !master) ? "inline" : "none";
   }
 
   function renderPlayers() {
@@ -316,11 +378,19 @@
 
     entries.forEach(([id, m]) => {
       const card = document.createElement("div");
-      card.className = "player";
+      card.className = "player" + (id === masterUid ? " is-master" : "");
 
       const dot = document.createElement("span");
       dot.className = "badge-here";
       card.appendChild(dot);
+
+      if (id === masterUid) {
+        const crown = document.createElement("span");
+        crown.className = "crown";
+        crown.textContent = "👑";
+        crown.title = "Room master";
+        card.appendChild(crown);
+      }
 
       const slot = document.createElement("div");
       slot.className = "vote-slot";
