@@ -66,7 +66,33 @@ This lets any signed-in visitor read/write rooms but blocks anonymous public tra
 Good enough for an internal team tool. (For stricter control you can scope member writes
 to `auth.uid`, but the clear-session button needs broader write, so keep it simple to start.)
 
-### 5. Deploy to GitHub Pages
+### 5. (Optional but recommended) Lock the database to your site — App Check
+
+Your Firebase config is public (that's normal — see the note below). App Check adds a
+real lock: the database will only accept requests that prove they came from *your* app
+running on *your* domain, using an invisible reCAPTCHA v3 check. Requests from a random
+script with a copied config get rejected.
+
+1. **Register a reCAPTCHA v3 site key.** Go to https://www.google.com/recaptcha/admin/create
+   - Type: **reCAPTCHA v3**
+   - Domains: add your GitHub Pages host, e.g. `your-username.github.io` (no `https://`, no path).
+   - Submit, then copy the **Site key** (the public one — ignore the secret key).
+2. **Paste it into `index.html`.** Find `RECAPTCHA_SITE_KEY` near the top of the `<script>`
+   and replace `YOUR_RECAPTCHA_V3_SITE_KEY` with your site key. (Until you do this, App Check
+   stays off and the app works normally.)
+3. **Register the app in Firebase App Check.** Firebase console → **Build → App Check → Apps**
+   → pick your web app → choose **reCAPTCHA v3** as the provider → paste the **same site key** →
+   Save.
+4. **Turn on enforcement for the database.** App Check → **APIs / Products** tab →
+   **Realtime Database → Enforce.** (Do this only *after* steps 1–3 are live and you've confirmed
+   the app still loads, or you'll lock yourself out until it propagates.)
+
+**Testing on localhost:** reCAPTCHA won't validate `localhost`, so App Check would block you
+locally. In `index.html`, uncomment the `self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;` line, load
+the page once, open the browser console, copy the debug token it prints, and add it under
+App Check → your app → **Manage debug tokens**. Re-comment that line before deploying.
+
+### 6. Deploy to GitHub Pages
 1. Create a repo (e.g. `planning-poker`) and add `index.html` to it.
 2. **Settings → Pages → Build and deployment → Source: Deploy from a branch**, pick `main` / root, **Save**.
 3. After a minute your site is live at `https://<your-username>.github.io/planning-poker/`.

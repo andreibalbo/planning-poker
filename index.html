@@ -97,6 +97,34 @@
   .vote-slot.revealed { border-style: solid; border-color: var(--accent); background: linear-gradient(135deg,#2a305a,#20264a); color: var(--text); }
   .badge-here { position: absolute; top: 10px; right: 10px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent2); box-shadow: 0 0 8px var(--accent2); }
 
+  /* Team columns */
+  .team-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 640px) { .team-cols { grid-template-columns: 1fr; } }
+  .team-panel {
+    background: rgba(255,255,255,.02); border: 1px solid rgba(255,255,255,.07);
+    border-radius: 18px; padding: 16px 16px 18px;
+  }
+  .team-panel[data-team="be"] { box-shadow: inset 0 3px 0 var(--accent); }
+  .team-panel[data-team="fe"] { box-shadow: inset 0 3px 0 var(--accent2); }
+  .team-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+  .team-title { font-weight: 700; font-size: 16px; }
+  .team-meta { font-size: 13px; color: var(--muted); text-align: right; }
+  .team-meta b { color: var(--text); font-weight: 700; }
+  .team-panel .players { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  .team-empty { color: var(--muted); font-size: 13px; font-style: italic; padding: 6px 2px; }
+
+  /* Team choice on join + in-room switch */
+  .team-choice { display: flex; gap: 10px; margin-top: 14px; }
+  .team-opt {
+    flex: 1; background: var(--card2); border: 2px solid rgba(255,255,255,.12); color: var(--text);
+  }
+  .team-opt.selected { border-color: var(--accent); background: linear-gradient(135deg, rgba(108,140,255,.28), rgba(76,211,165,.22)); }
+  .my-team-switch { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin: 0 0 20px; }
+  .switch-btn {
+    background: var(--card2); border: 1px solid rgba(255,255,255,.12); color: var(--text);
+    padding: 6px 12px; font-size: 13px; border-radius: 9px;
+  }
+
   .stats {
     display: none; margin-top: 24px; background: var(--card); border: 1px solid rgba(255,255,255,.08);
     border-radius: 16px; padding: 18px 20px; gap: 32px; flex-wrap: wrap;
@@ -142,9 +170,14 @@
     <button class="btn-danger" id="clearBtn">✕ Clear session</button>
   </div>
 
-  <p class="section-title">Participants</p>
-  <div class="players" id="players"></div>
+  <div class="my-team-switch" id="myTeamSwitch" style="display:none">
+    You're on <b id="myTeamLabel">—</b>. <button class="switch-btn" id="switchTeamBtn">Switch side</button>
+  </div>
 
+  <p class="section-title">Participants</p>
+  <div class="team-cols" id="teamCols"></div>
+
+  <p class="section-title" id="overallTitle" style="display:none; margin-top: 28px;">Everyone</p>
   <div class="stats" id="stats">
     <div class="stat"><span class="label">Average</span><span class="value" id="statAvg">—</span></div>
     <div class="stat"><span class="label">Range</span><span class="value" id="statRange">—</span></div>
@@ -156,8 +189,12 @@
 <div class="overlay" id="joinOverlay" style="display:none">
   <div class="join-card">
     <h1>Join the session</h1>
-    <p>Enter your name so the team can see you in the room.</p>
+    <p>Enter your name and pick your side.</p>
     <input type="text" id="nameInput" placeholder="Your name" maxlength="24" autocomplete="off" />
+    <div class="team-choice" id="teamChoice">
+      <button type="button" class="team-opt" data-team="be">⚙️ Backend</button>
+      <button type="button" class="team-opt" data-team="fe">🎨 Frontend</button>
+    </div>
     <button class="btn-primary" id="joinBtn">Enter room →</button>
   </div>
 </div>
@@ -172,6 +209,9 @@
   import {
     getAuth, signInAnonymously, onAuthStateChanged
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import {
+    initializeAppCheck, ReCaptchaV3Provider
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app-check.js";
 
   // ==========================================================================
   //  1. PASTE YOUR FIREBASE CONFIG HERE  (see README for how to get it)
@@ -187,7 +227,20 @@
   };
   // ==========================================================================
 
+  // ==========================================================================
+  //  2. (OPTIONAL) APP CHECK — paste your reCAPTCHA v3 SITE key to lock the
+  //     database to requests from this app/domain. Leave as-is to skip.
+  //     See the README "Lock the database to your site (App Check)" section.
+  // ==========================================================================
+  const RECAPTCHA_SITE_KEY = "YOUR_RECAPTCHA_V3_SITE_KEY";
+  // ==========================================================================
+
   const DECK = ["0", "1", "2", "3", "5", "8", "13", "21", "34", "55", "89", "?"];
+  const TEAMS = [
+    { id: "be", label: "Backend", icon: "⚙️" },
+    { id: "fe", label: "Frontend", icon: "🎨" }
+  ];
+  const teamById = (id) => TEAMS.find((t) => t.id === id);
 
   const configured = !firebaseConfig.apiKey.startsWith("YOUR_");
   if (!configured) {
@@ -201,6 +254,20 @@
   document.getElementById("roomName").textContent = roomId;
 
   const app = initializeApp(firebaseConfig);
+
+  // App Check: proves requests come from this genuine app before Firebase
+  // trusts them. Only runs once you've pasted a real reCAPTCHA v3 site key.
+  if (!RECAPTCHA_SITE_KEY.startsWith("YOUR_")) {
+    // For local testing on http://localhost, uncomment the next line, load the
+    // page once, then copy the debug token it logs into Firebase console →
+    // App Check → Apps → Manage debug tokens.
+    // self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+    initializeAppCheck(app, {
+      provider: new ReCaptchaV3Provider(RECAPTCHA_SITE_KEY),
+      isTokenAutoRefreshEnabled: true
+    });
+  }
+
   const db = getDatabase(app);
   const auth = getAuth(app);
 
@@ -211,6 +278,7 @@
 
   let uid = null;
   let myName = localStorage.getItem("pp_name") || "";
+  let selectedTeam = localStorage.getItem("pp_team") || null;
   let selectedVote = null;
   let revealed = false;
   let membersCache = {};
@@ -220,8 +288,18 @@
 
   // ---- DOM refs ----
   const $ = (id) => document.getElementById(id);
-  const cardsEl = $("cards"), playersEl = $("players"), appEl = $("app");
+  const cardsEl = $("cards"), teamColsEl = $("teamCols"), appEl = $("app");
   const joinOverlay = $("joinOverlay"), nameInput = $("nameInput");
+
+  // ---- Team choice on join ----
+  function paintTeamChoice() {
+    [...document.querySelectorAll(".team-opt")].forEach((b) => {
+      b.classList.toggle("selected", b.dataset.team === selectedTeam);
+    });
+  }
+  [...document.querySelectorAll(".team-opt")].forEach((b) => {
+    b.addEventListener("click", () => { selectedTeam = b.dataset.team; paintTeamChoice(); });
+  });
 
   // ---- Build vote cards ----
   DECK.forEach((v) => {
@@ -246,8 +324,9 @@
   });
 
   function startRoom() {
-    // Show join overlay (prefill remembered name)
+    // Show join overlay (prefill remembered name + team)
     nameInput.value = myName;
+    paintTeamChoice();
     joinOverlay.style.display = "flex";
     appEl.style.display = "block";
     setTimeout(() => nameInput.focus(), 100);
@@ -304,11 +383,15 @@
   async function joinRoom() {
     const name = nameInput.value.trim();
     if (!name) { nameInput.focus(); return; }
+    if (!selectedTeam) { $("teamChoice").animate(
+      [{ transform: "translateX(-4px)" }, { transform: "translateX(4px)" }, { transform: "translateX(0)" }],
+      { duration: 200, iterations: 2 }); return; }
     myName = name;
     localStorage.setItem("pp_name", name);
+    localStorage.setItem("pp_team", selectedTeam);
 
     const meRef = child(membersRef, uid);
-    await set(meRef, { name, vote: null, hasVoted: false, joinedAt: Date.now() });
+    await set(meRef, { name, team: selectedTeam, vote: null, hasVoted: false, joinedAt: Date.now() });
     // Auto-remove me when I close the tab / disconnect
     onDisconnect(meRef).remove();
     joined = true;
@@ -316,6 +399,15 @@
     joinOverlay.style.display = "none";
     maybeClaimMaster(); // first joiner grabs the crown
   }
+
+  // In-room side switch (keeps you in the room, just moves your column).
+  $("switchTeamBtn").addEventListener("click", async () => {
+    if (!joined || !uid) return;
+    const next = selectedTeam === "be" ? "fe" : "be";
+    selectedTeam = next;
+    localStorage.setItem("pp_team", next);
+    await update(child(membersRef, uid), { team: next });
+  });
 
   async function castVote(v) {
     if (!uid || !membersCache[uid]) return;
@@ -369,54 +461,112 @@
     $("guestHint").style.display = (joined && !master) ? "inline" : "none";
   }
 
+  function makePlayerCard(id, m) {
+    const card = document.createElement("div");
+    card.className = "player" + (id === masterUid ? " is-master" : "");
+
+    const dot = document.createElement("span");
+    dot.className = "badge-here";
+    card.appendChild(dot);
+
+    if (id === masterUid) {
+      const crown = document.createElement("span");
+      crown.className = "crown";
+      crown.textContent = "👑";
+      crown.title = "Room master";
+      card.appendChild(crown);
+    }
+
+    const slot = document.createElement("div");
+    slot.className = "vote-slot";
+    if (revealed && m.hasVoted) {
+      slot.classList.add("revealed");
+      slot.textContent = m.vote;
+    } else if (m.hasVoted) {
+      slot.classList.add("voted");
+      slot.textContent = "✓";
+    } else {
+      slot.textContent = "…";
+    }
+    card.appendChild(slot);
+
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = m.name;
+    card.appendChild(name);
+
+    if (id === uid) {
+      const you = document.createElement("div");
+      you.className = "you";
+      you.textContent = "you";
+      card.appendChild(you);
+    }
+    return card;
+  }
+
+  // Average/range/consensus for a set of members. "?" and blanks excluded.
+  function computeStats(entries) {
+    const numeric = entries.map(([, m]) => m.vote)
+      .filter((v) => v !== null && v !== "?" && !isNaN(parseFloat(v))).map(Number);
+    const voted = entries.filter(([, m]) => m.hasVoted).length;
+    if (numeric.length === 0) return { avg: null, min: null, max: null, voted, hasNumbers: false, unanimous: false };
+    const avg = numeric.reduce((a, b) => a + b, 0) / numeric.length;
+    const min = Math.min(...numeric), max = Math.max(...numeric);
+    const unanimous = min === max && numeric.length === voted; // no "?" outstanding
+    return { avg, min, max, voted, hasNumbers: true, unanimous };
+  }
+
   function renderPlayers() {
     const entries = Object.entries(membersCache)
       .sort((a, b) => (a[1].joinedAt || 0) - (b[1].joinedAt || 0));
 
     $("onlineCount").textContent = entries.length;
-    playersEl.innerHTML = "";
 
-    entries.forEach(([id, m]) => {
-      const card = document.createElement("div");
-      card.className = "player" + (id === masterUid ? " is-master" : "");
+    // My-team switch label
+    const meTeam = membersCache[uid] ? teamById(membersCache[uid].team) : null;
+    $("myTeamSwitch").style.display = (joined && meTeam) ? "flex" : "none";
+    if (meTeam) $("myTeamLabel").textContent = `${meTeam.icon} ${meTeam.label}`;
 
-      const dot = document.createElement("span");
-      dot.className = "badge-here";
-      card.appendChild(dot);
+    // Build the two team columns
+    teamColsEl.innerHTML = "";
+    TEAMS.forEach((team) => {
+      const members = entries.filter(([, m]) => (m.team || "be") === team.id);
 
-      if (id === masterUid) {
-        const crown = document.createElement("span");
-        crown.className = "crown";
-        crown.textContent = "👑";
-        crown.title = "Room master";
-        card.appendChild(crown);
-      }
+      const panel = document.createElement("div");
+      panel.className = "team-panel";
+      panel.dataset.team = team.id;
 
-      const slot = document.createElement("div");
-      slot.className = "vote-slot";
-      if (revealed && m.hasVoted) {
-        slot.classList.add("revealed");
-        slot.textContent = m.vote;
-      } else if (m.hasVoted) {
-        slot.classList.add("voted");
-        slot.textContent = "✓";
+      const head = document.createElement("div");
+      head.className = "team-head";
+      const title = document.createElement("span");
+      title.className = "team-title";
+      title.textContent = `${team.icon} ${team.label}`;
+      const meta = document.createElement("span");
+      meta.className = "team-meta";
+      const s = computeStats(members);
+      if (revealed && s.hasNumbers) {
+        const range = s.min === s.max ? `${s.min}` : `${s.min}–${s.max}`;
+        meta.innerHTML = `${members.length} here · avg <b>${s.avg.toFixed(1)}</b> · ${range}` +
+          (s.unanimous ? " · 🎉" : "");
       } else {
-        slot.textContent = "…";
+        meta.innerHTML = `${members.length} here · ${s.voted} voted`;
       }
-      card.appendChild(slot);
+      head.appendChild(title);
+      head.appendChild(meta);
+      panel.appendChild(head);
 
-      const name = document.createElement("div");
-      name.className = "name";
-      name.textContent = m.name;
-      card.appendChild(name);
-
-      if (id === uid) {
-        const you = document.createElement("div");
-        you.className = "you";
-        you.textContent = "you";
-        card.appendChild(you);
+      const grid = document.createElement("div");
+      grid.className = "players";
+      if (members.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "team-empty";
+        empty.textContent = "No one here yet";
+        grid.appendChild(empty);
+      } else {
+        members.forEach(([id, m]) => grid.appendChild(makePlayerCard(id, m)));
       }
-      playersEl.appendChild(card);
+      panel.appendChild(grid);
+      teamColsEl.appendChild(panel);
     });
 
     // Sync my selected vote from the DB (e.g. after clear or reconnect)
@@ -437,30 +587,26 @@
 
   function renderStats(entries) {
     const statsEl = $("stats");
-    if (!revealed) { statsEl.classList.remove("show"); return; }
+    if (!revealed) {
+      statsEl.classList.remove("show");
+      $("overallTitle").style.display = "none";
+      return;
+    }
 
-    const numeric = entries
-      .map(([, m]) => m.vote)
-      .filter((v) => v !== null && v !== "?" && !isNaN(parseFloat(v)))
-      .map(Number);
-    const votedCount = entries.filter(([, m]) => m.hasVoted).length;
-
+    const s = computeStats(entries);
     statsEl.classList.add("show");
-    $("statCount").textContent = votedCount;
+    $("overallTitle").style.display = "block";
+    $("statCount").textContent = s.voted;
 
-    if (numeric.length === 0) {
+    if (!s.hasNumbers) {
       $("statAvg").textContent = "—";
       $("statRange").textContent = "—";
       $("statConsensus").textContent = "—";
       return;
     }
-    const avg = numeric.reduce((a, b) => a + b, 0) / numeric.length;
-    const min = Math.min(...numeric), max = Math.max(...numeric);
-    $("statAvg").textContent = avg.toFixed(1);
-    $("statRange").textContent = min === max ? `${min}` : `${min}–${max}`;
-    const allSame = numeric.every((n) => n === numeric[0]) &&
-                    numeric.length === votedCount; // no "?" outstanding
-    $("statConsensus").textContent = allSame ? "Unanimous 🎉" : (min === max ? "Aligned" : "Discuss");
+    $("statAvg").textContent = s.avg.toFixed(1);
+    $("statRange").textContent = s.min === s.max ? `${s.min}` : `${s.min}–${s.max}`;
+    $("statConsensus").textContent = s.unanimous ? "Unanimous 🎉" : (s.min === s.max ? "Aligned" : "Discuss");
   }
 </script>
 </body>
